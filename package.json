@@ -1,0 +1,22 @@
+{
+  "name": "wangzhang-site",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "payload dev",
+    "build": "payload build",
+    "start": "payload start"
+  },
+  "dependencies": {
+    "@payloadcms/db-mongodb": "latest",
+    "@payloadcms/next": "latest",
+    "@payloadcms/richtext-lexical": "latest",
+    "@payloadcms/ui": "latest",
+    "next": "latest",
+    "payload": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwindcss": "latest",
+    "framer-motion": "latest"
+  }
+}
