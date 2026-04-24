@@ -13,9 +13,9 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "baseUrl": "./src",
+    "baseUrl": "./",
     "paths": {
-      "@/*": ["*"]
+      "@/*": ["./*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "payload.config.ts"],
