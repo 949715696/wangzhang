@@ -50,6 +50,7 @@ jobs:
             $chunks += $clean
           }
           $b64 = $chunks -join ''
+          if ($b64.Length -ne 200316) { throw "Combined Base64 length $($b64.Length), expected 200316." }
           if (($b64.Length % 4) -ne 0) { throw "Combined Base64 length $($b64.Length) is not divisible by 4." }
           $bytes = [Convert]::FromBase64String($b64)
           $zip = Join-Path $env:RUNNER_TEMP 'hgms-m0-final-autonomous.zip'
@@ -102,6 +103,10 @@ jobs:
           $reports = Join-Path $resultRoot 'tests\reports'
           New-Item -ItemType Directory -Force -Path $reports | Out-Null
           "HGMS_REPORTS=$reports" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($env:HGMS_ROOT) {
+            $lock = Join-Path $env:HGMS_ROOT 'pnpm-lock.yaml'
+            if (Test-Path $lock) { Copy-Item -Force $lock (Join-Path $reports 'pnpm-lock.yaml') }
+          }
           $jobStatus = '${{ job.status }}'
           $milestone = if ($jobStatus -eq 'success') { 'ACCEPTED' } else { 'REJECTED' }
           @(
@@ -134,8 +139,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: hgms-m0-windows-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ env.HGMS_REPORTS }}/**
-            ${{ env.HGMS_ROOT }}/pnpm-lock.yaml
-          if-no-files-found: warn
+          path: ${{ env.HGMS_REPORTS }}/**
+          if-no-files-found: error
           retention-days: 14
