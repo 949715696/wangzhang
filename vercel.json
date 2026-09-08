@@ -1,0 +1,14 @@
+{
+  "git": {
+    "deploymentEnabled": {
+      "hgms-m0-ci": false,
+      "hgms-m0-ci-repair": false,
+      "hgms-m0-ci-clean": false,
+      "hgms-m0-ci-ghfix": false,
+      "hgms-m0-ci-ghfix-2": false,
+      "tmp-please-ignore-test": false
+    }
+  },
+  "buildCommand": "node .github/scripts/vercel-ci-carrier-build.mjs",
+  "outputDirectory": "public"
+}

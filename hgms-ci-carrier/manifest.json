@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1.0.0",
+  "fileName": "hgms-m0-autofixed-v23.zip",
+  "rootDirectory": "hgms-m0-final-autonomous",
+  "sha256": "6b3534f90bf87ef6a3a700c8fd517d6a2bcccc69b33499e240e25ecfa11d4252",
+  "status": "candidate_zip_not_uploaded_to_github_yet",
+  "note": "The old Base64 part carrier is disabled. Upload the binary ZIP or replace this manifest before dispatching the workflow."
+}

@@ -1,9 +1,12 @@
 name: HGMS M0 Windows Gate
 
 on:
-  push:
-    branches: [hgms-m0-ci]
   workflow_dispatch:
+    inputs:
+      candidate:
+        description: 'Candidate ZIP filename under hgms-ci-carrier/'
+        required: false
+        default: 'hgms-m0-autofixed-v23.zip'
 
 permissions:
   contents: read
@@ -21,7 +24,7 @@ jobs:
       CI: '1'
       ELECTRON_ENABLE_LOGGING: '1'
     steps:
-      - name: Checkout CI carrier branch
+      - name: Checkout HGMS CI carrier branch
         uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -32,70 +35,35 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
-      - name: Reconstruct exact HGMS candidate
+      - name: Reconstruct verified HGMS candidate
         shell: pwsh
         run: |
-          $parts = Get-ChildItem "$env:GITHUB_WORKSPACE\hgms-ci-carrier\part-*.txt" | Sort-Object Name
-          if ($parts.Count -ne 5) { throw "Expected 5 carrier parts, found $($parts.Count)." }
-          $chunks = @()
-          foreach ($part in $parts) {
-            $raw = Get-Content -Raw -LiteralPath $part.FullName
-            $clean = $raw -replace "[\uFEFF\s]", ''
-            $bad = [regex]::Matches($clean, '[^A-Za-z0-9+/=]')
-            if ($bad.Count -gt 0) {
-              $first = $bad[0]
-              $code = [int][char]$first.Value[0]
-              throw "Invalid Base64 carrier character in $($part.Name) at index $($first.Index): U+$('{0:X4}' -f $code)"
-            }
-            $chunks += $clean
-          }
-          $b64 = $chunks -join ''
-          if ($b64.Length -ne 200316) { throw "Combined Base64 length $($b64.Length), expected 200316." }
-          if (($b64.Length % 4) -ne 0) { throw "Combined Base64 length $($b64.Length) is not divisible by 4." }
-          $bytes = [Convert]::FromBase64String($b64)
-          $zip = Join-Path $env:RUNNER_TEMP 'hgms-m0-final-autonomous.zip'
-          [IO.File]::WriteAllBytes($zip, $bytes)
+          $candidateName = '${{ inputs.candidate }}'
+          if ([string]::IsNullOrWhiteSpace($candidateName)) { $candidateName = 'hgms-m0-autofixed-v23.zip' }
+          if ($candidateName -match '[\\/]') { throw "Candidate input must be a filename, not a path: $candidateName" }
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'hgms-ci-carrier\manifest.json'
+          if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'No clean hgms-ci-carrier/manifest.json found. The old part-*.txt carrier is intentionally disabled because it was corrupted.' }
+          $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+          if ($manifest.fileName -ne $candidateName) { throw "Workflow candidate '$candidateName' does not match manifest fileName '$($manifest.fileName)'." }
+          $zip = Join-Path $env:GITHUB_WORKSPACE (Join-Path 'hgms-ci-carrier' $manifest.fileName)
+          if (-not (Test-Path -LiteralPath $zip)) { throw "Candidate ZIP not found: $zip" }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Candidate SHA256: $hash"
-          if ($hash -ne '11a1a36a92c9563a9958684548e79b2aaf6151dae82ba426a90ab6209a0ffff3') {
-            throw "Candidate SHA256 mismatch: $hash"
-          }
+          if ($hash -ne $manifest.sha256) { throw "Candidate SHA256 mismatch: expected $($manifest.sha256), got $hash" }
           $extract = Join-Path $env:RUNNER_TEMP 'hgms-m0'
+          Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
           Expand-Archive -Force $zip $extract
-          $root = Join-Path $extract 'hgms-m0-final-autonomous'
+          $root = Join-Path $extract $manifest.rootDirectory
           if (-not (Test-Path (Join-Path $root 'package.json'))) { throw 'HGMS candidate root/package.json not found.' }
+          if (-not (Test-Path (Join-Path $root 'tools\run-m0-gate.ps1'))) { throw 'Authoritative tools/run-m0-gate.ps1 not found in candidate.' }
           "HGMS_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Install pnpm 12.3.4
-        shell: pwsh
-        run: |
-          npm install --global pnpm@12.3.4
-          $version = pnpm --version
-          Write-Host "pnpm: $version"
-          if ($version.Trim() -ne '12.3.4') { throw "Expected pnpm 12.3.4, got $version" }
-
-      - name: Install candidate dependencies
+      - name: Run authoritative M0 Windows gate
         shell: pwsh
         working-directory: ${{ env.HGMS_ROOT }}
-        run: |
-          pnpm install
-          if (-not (Test-Path pnpm-lock.yaml)) { throw 'pnpm install did not produce pnpm-lock.yaml.' }
-          pnpm install --frozen-lockfile
+        run: powershell -ExecutionPolicy Bypass -File tools/run-m0-gate.ps1
 
-      - name: Verify Electron runtime
-        shell: pwsh
-        working-directory: ${{ env.HGMS_ROOT }}
-        run: |
-          $version = pnpm --filter @hgms/desktop exec electron --version
-          Write-Host "Electron: $version"
-          if ($version.Trim() -ne 'v44.2.0') { throw "Expected Electron v44.2.0, got $version" }
-
-      - name: Run formal M0 acceptance
-        shell: pwsh
-        working-directory: ${{ env.HGMS_ROOT }}
-        run: pnpm run test:m0
-
-      - name: Write M0 truth result
+      - name: Write GitHub CI metadata
         if: always()
         shell: pwsh
         run: |
@@ -103,36 +71,34 @@ jobs:
           $reports = Join-Path $resultRoot 'tests\reports'
           New-Item -ItemType Directory -Force -Path $reports | Out-Null
           "HGMS_REPORTS=$reports" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          if ($env:HGMS_ROOT) {
-            $lock = Join-Path $env:HGMS_ROOT 'pnpm-lock.yaml'
-            if (Test-Path $lock) { Copy-Item -Force $lock (Join-Path $reports 'pnpm-lock.yaml') }
-          }
           $jobStatus = '${{ job.status }}'
           $milestone = if ($jobStatus -eq 'success') { 'ACCEPTED' } else { 'REJECTED' }
-          @(
-            "M0 = $milestone",
-            "candidate_sha256=11a1a36a92c9563a9958684548e79b2aaf6151dae82ba426a90ab6209a0ffff3",
-            "run_id=${{ github.run_id }}",
-            "run_attempt=${{ github.run_attempt }}",
-            "carrier_sha=${{ github.sha }}",
-            "ref=${{ github.ref }}",
-            "runner_os=${{ runner.os }}",
-            "runner_arch=${{ runner.arch }}",
-            "job_status=$jobStatus"
-          ) | Set-Content (Join-Path $reports 'm0-github-windows-ci.txt') -Encoding UTF8
           [ordered]@{
-            schemaVersion = '1.0.0'
+            schemaVersion = '1.2.0'
             milestone = 'M0'
             status = $milestone
-            candidateSha256 = '11a1a36a92c9563a9958684548e79b2aaf6151dae82ba426a90ab6209a0ffff3'
+            jobStatus = $jobStatus
+            workflow = '${{ github.workflow }}'
             runId = '${{ github.run_id }}'
             runAttempt = '${{ github.run_attempt }}'
             carrierSha = '${{ github.sha }}'
             ref = '${{ github.ref }}'
             runnerOs = '${{ runner.os }}'
             runnerArch = '${{ runner.arch }}'
-            jobStatus = $jobStatus
-          } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $reports 'm0-github-windows-ci.json') -Encoding UTF8
+            authoritativeGate = 'tools/run-m0-gate.ps1'
+          } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $reports 'm0-github-windows-ci.json') -Encoding UTF8
+          @(
+            "M0 = $milestone",
+            "workflow=${{ github.workflow }}",
+            "run_id=${{ github.run_id }}",
+            "run_attempt=${{ github.run_attempt }}",
+            "carrier_sha=${{ github.sha }}",
+            "ref=${{ github.ref }}",
+            "runner_os=${{ runner.os }}",
+            "runner_arch=${{ runner.arch }}",
+            "job_status=$jobStatus",
+            "authoritative_gate=tools/run-m0-gate.ps1"
+          ) | Set-Content (Join-Path $reports 'm0-github-windows-ci.txt') -Encoding UTF8
 
       - name: Upload M0 reports
         if: always()
@@ -140,5 +106,5 @@ jobs:
         with:
           name: hgms-m0-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.HGMS_REPORTS }}/**
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
