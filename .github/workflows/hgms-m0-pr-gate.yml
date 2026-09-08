@@ -1,0 +1,124 @@
+name: HGMS M0 PR Windows Gate
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hgms-m0-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  m0-windows:
+    name: HGMS M0 / Windows 2025 / Node 22
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      CI: '1'
+      ELECTRON_ENABLE_LOGGING: '1'
+    steps:
+      - name: Checkout candidate merge
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Reconstruct exact HGMS candidate
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem "$env:GITHUB_WORKSPACE\hgms-ci-carrier\part-*.txt" | Sort-Object Name
+          if ($parts.Count -ne 5) { throw "Expected 5 carrier parts, found $($parts.Count)." }
+          $b64 = ($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join ''
+          $bytes = [Convert]::FromBase64String($b64)
+          $zip = Join-Path $env:RUNNER_TEMP 'hgms-m0-final-autonomous.zip'
+          [IO.File]::WriteAllBytes($zip, $bytes)
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Candidate SHA256: $hash"
+          if ($hash -ne '11a1a36a92c9563a9958684548e79b2aaf6151dae82ba426a90ab6209a0ffff3') {
+            throw "Candidate SHA256 mismatch: $hash"
+          }
+          $extract = Join-Path $env:RUNNER_TEMP 'hgms-m0'
+          Expand-Archive -Force $zip $extract
+          $root = Join-Path $extract 'hgms-m0-final-autonomous'
+          if (-not (Test-Path (Join-Path $root 'package.json'))) { throw 'HGMS candidate root/package.json not found.' }
+          "HGMS_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install pnpm 12.3.4
+        shell: pwsh
+        run: |
+          npm install --global pnpm@12.3.4
+          $version = pnpm --version
+          Write-Host "pnpm: $version"
+          if ($version.Trim() -ne '12.3.4') { throw "Expected pnpm 12.3.4, got $version" }
+
+      - name: Install candidate dependencies
+        shell: pwsh
+        working-directory: ${{ env.HGMS_ROOT }}
+        run: |
+          pnpm install
+          if (-not (Test-Path pnpm-lock.yaml)) { throw 'pnpm install did not produce pnpm-lock.yaml.' }
+          pnpm install --frozen-lockfile
+
+      - name: Verify Electron runtime
+        shell: pwsh
+        working-directory: ${{ env.HGMS_ROOT }}
+        run: |
+          $version = pnpm --filter @hgms/desktop exec electron --version
+          Write-Host "Electron: $version"
+          if ($version.Trim() -ne 'v44.2.0') { throw "Expected Electron v44.2.0, got $version" }
+
+      - name: Run formal M0 acceptance
+        shell: pwsh
+        working-directory: ${{ env.HGMS_ROOT }}
+        run: pnpm run test:m0
+
+      - name: Write M0 truth result
+        if: always()
+        shell: pwsh
+        run: |
+          $reports = Join-Path $env:HGMS_ROOT 'tests\reports'
+          New-Item -ItemType Directory -Force -Path $reports | Out-Null
+          $jobStatus = '${{ job.status }}'
+          $milestone = if ($jobStatus -eq 'success') { 'ACCEPTED' } else { 'REJECTED' }
+          @(
+            "M0 = $milestone",
+            "candidate_sha256=11a1a36a92c9563a9958684548e79b2aaf6151dae82ba426a90ab6209a0ffff3",
+            "run_id=${{ github.run_id }}",
+            "run_attempt=${{ github.run_attempt }}",
+            "head_sha=${{ github.event.pull_request.head.sha }}",
+            "runner_os=${{ runner.os }}",
+            "runner_arch=${{ runner.arch }}",
+            "job_status=$jobStatus"
+          ) | Set-Content (Join-Path $reports 'm0-github-windows-ci.txt') -Encoding UTF8
+          [ordered]@{
+            schemaVersion = '1.0.0'
+            milestone = 'M0'
+            status = $milestone
+            candidateSha256 = '11a1a36a92c9563a9958684548e79b2aaf6151dae82ba426a90ab6209a0ffff3'
+            runId = '${{ github.run_id }}'
+            runAttempt = '${{ github.run_attempt }}'
+            headSha = '${{ github.event.pull_request.head.sha }}'
+            runnerOs = '${{ runner.os }}'
+            runnerArch = '${{ runner.arch }}'
+            jobStatus = $jobStatus
+          } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $reports 'm0-github-windows-ci.json') -Encoding UTF8
+
+      - name: Upload M0 reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hgms-m0-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.HGMS_ROOT }}/tests/reports/**
+            ${{ env.HGMS_ROOT }}/pnpm-lock.yaml
+          if-no-files-found: warn
+          retention-days: 14
