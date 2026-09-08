@@ -6,7 +6,7 @@ on:
       candidate:
         description: 'Candidate ZIP filename under hgms-ci-carrier/'
         required: false
-        default: 'hgms-m0-autofixed-v23.zip'
+        default: 'hgms-m0-final-autonomous.zip'
 
 permissions:
   contents: read
@@ -39,10 +39,10 @@ jobs:
         shell: pwsh
         run: |
           $candidateName = '${{ inputs.candidate }}'
-          if ([string]::IsNullOrWhiteSpace($candidateName)) { $candidateName = 'hgms-m0-autofixed-v23.zip' }
+          if ([string]::IsNullOrWhiteSpace($candidateName)) { $candidateName = 'hgms-m0-final-autonomous.zip' }
           if ($candidateName -match '[\\/]') { throw "Candidate input must be a filename, not a path: $candidateName" }
           $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'hgms-ci-carrier\manifest.json'
-          if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'No clean hgms-ci-carrier/manifest.json found. The old part-*.txt carrier is intentionally disabled because it was corrupted.' }
+          if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'No clean hgms-ci-carrier/manifest.json found.' }
           $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
           if ($manifest.fileName -ne $candidateName) { throw "Workflow candidate '$candidateName' does not match manifest fileName '$($manifest.fileName)'." }
           $zip = Join-Path $env:GITHUB_WORKSPACE (Join-Path 'hgms-ci-carrier' $manifest.fileName)
