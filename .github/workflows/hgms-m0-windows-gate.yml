@@ -37,7 +37,20 @@ jobs:
         run: |
           $parts = Get-ChildItem "$env:GITHUB_WORKSPACE\hgms-ci-carrier\part-*.txt" | Sort-Object Name
           if ($parts.Count -ne 5) { throw "Expected 5 carrier parts, found $($parts.Count)." }
-          $b64 = ($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join ''
+          $chunks = @()
+          foreach ($part in $parts) {
+            $raw = Get-Content -Raw -LiteralPath $part.FullName
+            $clean = $raw -replace "[\uFEFF\s]", ''
+            $bad = [regex]::Matches($clean, '[^A-Za-z0-9+/=]')
+            if ($bad.Count -gt 0) {
+              $first = $bad[0]
+              $code = [int][char]$first.Value[0]
+              throw "Invalid Base64 carrier character in $($part.Name) at index $($first.Index): U+$('{0:X4}' -f $code)"
+            }
+            $chunks += $clean
+          }
+          $b64 = $chunks -join ''
+          if (($b64.Length % 4) -ne 0) { throw "Combined Base64 length $($b64.Length) is not divisible by 4." }
           $bytes = [Convert]::FromBase64String($b64)
           $zip = Join-Path $env:RUNNER_TEMP 'hgms-m0-final-autonomous.zip'
           [IO.File]::WriteAllBytes($zip, $bytes)
@@ -85,8 +98,10 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          $reports = Join-Path $env:HGMS_ROOT 'tests\reports'
+          $resultRoot = if ($env:HGMS_ROOT) { $env:HGMS_ROOT } else { Join-Path $env:RUNNER_TEMP 'hgms-m0-gate-result' }
+          $reports = Join-Path $resultRoot 'tests\reports'
           New-Item -ItemType Directory -Force -Path $reports | Out-Null
+          "HGMS_REPORTS=$reports" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $jobStatus = '${{ job.status }}'
           $milestone = if ($jobStatus -eq 'success') { 'ACCEPTED' } else { 'REJECTED' }
           @(
@@ -120,7 +135,7 @@ jobs:
         with:
           name: hgms-m0-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ env.HGMS_ROOT }}/tests/reports/**
+            ${{ env.HGMS_REPORTS }}/**
             ${{ env.HGMS_ROOT }}/pnpm-lock.yaml
           if-no-files-found: warn
           retention-days: 14
